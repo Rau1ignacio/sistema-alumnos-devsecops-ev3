@@ -1,0 +1,22 @@
+# Dependabot: gestión automática de dependencias de "Sistema Alumnos".
+#
+# - Alertas de seguridad + security updates: activadas en Settings > Code security (PR inmediato ante un CVE).
+# - Version updates (este archivo): revisa a diario requirements.txt y requirements-dev.txt y abre un PR por paquete.
+# - Cada PR fusionado en main dispara el pipeline de Jenkins (pollSCM): pruebas + Bandit + pip-audit + OWASP ZAP
+#   verifican que la actualización no rompe nada ni introduce vulnerabilidades nuevas antes de llegar a producción.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "08:00"
+      timezone: "America/Santiago"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "DEPS"
+      prefix-development: "DEPS-dev"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "seguridad"
