@@ -1,7 +1,9 @@
-// Jenkinsfile - Pipeline de "Sistema Alumnos" (SecureDev · Evaluación Parcial 3 · OCY1102)
+// Jenkinsfile - Pipeline DevSecOps de "Sistema Alumnos" (SecureDev · Evaluación Parcial 3 · OCY1102)
 //
-// Esta es la versión BASE: construye, prueba y despliega en producción.
-// Los marcadores  >>> [ETIQUETA]  indican dónde agregar las etapas de seguridad.
+// Build -> Test -> Security Review (SAST) -> Dependency Management (SCA)
+//       -> Deploy Staging -> DAST - OWASP ZAP -> [gate] -> Deploy Producción
+//
+// Cualquier hallazgo de seguridad deja el build en UNSTABLE y la puerta (gate) impide desplegar en producción.
 pipeline {
     agent any
 
@@ -49,12 +51,60 @@ pipeline {
             }
         }
 
-        // >>> [SEGURIDAD]: aquí van las etapas "Security Review (SAST)" y "Dependency Management"
+        stage('Security Review (SAST)') {
+            steps {
+                // Reporte completo (todas las severidades) para la trazabilidad
+                sh 'bandit -f json -o reports/bandit.json app.py || true'
+                sh 'bandit -f txt -o reports/bandit.txt app.py || true'
+                script {
+                    // Política: cualquier hallazgo Medium o High marca el build como UNSTABLE
+                    def rc = sh(returnStatus: true, script: 'bandit -q -ll app.py')
+                    if (rc != 0) {
+                        unstable('Bandit encontró hallazgos Medium/High en app.py (ver reports/bandit.txt)')
+                    }
+                }
+            }
+        }
 
-        // >>> [ZAP]: aquí van las etapas "Deploy Staging" y "DAST - OWASP ZAP"
+        stage('Dependency Management (SCA)') {
+            steps {
+                sh 'pip-audit -r requirements.txt -f json -o reports/pip-audit.json || true'
+                script {
+                    // Política: ninguna dependencia de ejecución con vulnerabilidades conocidas (CVE/GHSA/PYSEC)
+                    def rc = sh(returnStatus: true, script: 'pip-audit -r requirements.txt --desc on > reports/pip-audit.txt 2>&1')
+                    sh 'cat reports/pip-audit.txt'
+                    if (rc != 0) {
+                        unstable('pip-audit encontró dependencias vulnerables (ver reports/pip-audit.txt)')
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Staging') {
+            steps {
+                sh 'bash scripts/deploy.sh staging 5001'
+            }
+        }
+
+        stage('DAST - OWASP ZAP') {
+            steps {
+                script {
+                    // ZAP corre en su propio contenedor y ataca staging por la red interna de Docker
+                    def rc = sh(returnStatus: true, script: 'python3 scripts/zap_scan.py http://jenkins:5001')
+                    if (rc == 2) {
+                        unstable('OWASP ZAP encontró alertas High/Medium (ver reports/zap-report.html)')
+                    } else if (rc != 0) {
+                        error("El escaneo de OWASP ZAP falló (código ${rc})")
+                    }
+                }
+            }
+        }
 
         stage('Deploy Producción') {
-            // >>> [GATE]: aquí va la condición "when" que protege producción
+            // Puerta de seguridad: solo se despliega si TODAS las revisiones anteriores quedaron limpias
+            when {
+                expression { currentBuild.currentResult == 'SUCCESS' }
+            }
             steps {
                 sh 'bash scripts/deploy.sh produccion 5000'
                 script { env.PRODUCCION = env.APP_VERSION }
@@ -69,6 +119,9 @@ pipeline {
                 sh 'python3 scripts/trazabilidad.py'
             }
             archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
+        }
+        unstable {
+            echo 'Build UNSTABLE: hay hallazgos de seguridad. Producción NO se actualizó (gate de seguridad).'
         }
     }
 }
