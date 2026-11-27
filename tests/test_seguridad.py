@@ -30,3 +30,21 @@ def test_vuln02_xss_reflejado_se_escapa(client):
     cuerpo = r.get_data(as_text=True)
     assert "<script>" not in cuerpo
     assert "&lt;script&gt;" in cuerpo
+
+
+def _login(client, usuario, clave):
+    import re
+    token = re.search(r'name="csrf_token" value="([^"]+)"', client.get("/").get_data(as_text=True))
+    return client.post("/login", data={"usuario": usuario, "clave": clave,
+                                       **({"csrf_token": token.group(1)} if token else {})})
+
+
+def test_vuln04_clave_por_defecto_admin_ya_no_funciona(client):
+    assert _login(client, "admin", "admin").status_code == 401
+
+
+def test_vuln04_hash_robusto_y_login_correcto(client, monkeypatch):
+    from werkzeug.security import generate_password_hash
+    monkeypatch.setattr(modulo_app, "ADMIN_CLAVE_HASH", generate_password_hash("Clave-Larga-De-Prueba-2026"))
+    assert modulo_app.ADMIN_CLAVE_HASH.startswith(("pbkdf2:", "scrypt:"))
+    assert _login(client, "admin", "Clave-Larga-De-Prueba-2026").status_code == 200
