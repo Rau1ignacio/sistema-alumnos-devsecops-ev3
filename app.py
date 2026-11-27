@@ -24,6 +24,21 @@ app = Flask(__name__)
 ## Si no está definida se genera una aleatoria al iniciar: nunca queda escrita en el código ni en Git.
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 ADMIN_USUARIO = os.environ.get("ADMIN_USUARIO", "admin")
+## VULN-08: la cookie de sesión no es accesible desde JavaScript y no viaja en peticiones de otros sitios.
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict",
+                  SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE", "0") == "1")
+CABECERAS_SEGURIDAD = {
+    "Content-Security-Policy": "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; "
+                               "frame-ancestors 'none'; base-uri 'none'",
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "geolocation=(), camera=(), microphone=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Cross-Origin-Embedder-Policy": "require-corp",
+    "Cache-Control": "no-store",
+}
 ## VULN-04: la clave del administrador se guarda como hash PBKDF2-SHA256 con sal (werkzeug), no como MD5,
 ## y llega por variable de entorno. Sin ella no existe clave por defecto: se usa una aleatoria que nadie conoce.
 ADMIN_CLAVE_HASH = os.environ.get("ADMIN_CLAVE_HASH") or generate_password_hash(secrets.token_urlsafe(32), method="pbkdf2:sha256:600000")
@@ -139,6 +154,8 @@ def despues_de_la_peticion(respuesta):
     if endpoint != "/metrics":
         HTTP_PETICIONES.labels(request.method, endpoint, str(respuesta.status_code)).inc()
         HTTP_LATENCIA.labels(endpoint).observe(time.perf_counter() - g.get("inicio", time.perf_counter()))
+    # VULN-08: cabeceras de seguridad en todas las respuestas (alertas de OWASP ZAP).
+    respuesta.headers.update(CABECERAS_SEGURIDAD)
     return respuesta
 
 

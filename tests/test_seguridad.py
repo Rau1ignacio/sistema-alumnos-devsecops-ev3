@@ -65,3 +65,13 @@ def test_vuln06_fuerza_bruta_bloquea_con_429(client):
     codigos = [_login(client, "admin", f"clave-{i}").status_code for i in range(modulo_app.MAX_FALLIDOS + 2)]
     assert codigos[:modulo_app.MAX_FALLIDOS] == [401] * modulo_app.MAX_FALLIDOS
     assert codigos[-1] == 429
+
+
+def test_vuln08_cabeceras_de_seguridad(client):
+    r = client.get("/")
+    assert "default-src 'none'" in r.headers["Content-Security-Policy"]
+    assert "frame-ancestors 'none'" in r.headers["Content-Security-Policy"]
+    assert r.headers["X-Frame-Options"] == "DENY"
+    assert r.headers["X-Content-Type-Options"] == "nosniff"
+    cookie = r.headers.get("Set-Cookie", "")
+    assert "HttpOnly" in cookie and "SameSite=Strict" in cookie
