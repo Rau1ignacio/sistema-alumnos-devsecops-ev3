@@ -150,8 +150,9 @@ def hello():
     @brief Saluda al usuario cuyo nombre llega en el parámetro de URL «name».
     @return Página HTML con el saludo.
     """
-    name = request.args.get("name", "visitante")
-    return f"<h1>Hola, {name}!</h1>"
+    name = request.args.get("name", "visitante")[:100]
+    # VULN-02: el nombre se escapa (Jinja2 autoescape) antes de insertarlo en el HTML.
+    return render_template_string("<h1>Hola, {{ name }}!</h1>", name=name)
 
 
 @app.route("/health")
