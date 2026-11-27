@@ -334,4 +334,6 @@ def metrics():
 iniciar_db()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # VULN-07: solo para desarrollo local. Sin depurador de Werkzeug (ejecución remota de código) y escuchando
+    # únicamente en localhost. En staging/producción la app la sirve gunicorn (scripts/deploy.sh).
+    app.run(host="127.0.0.1", port=5000, debug=False)
