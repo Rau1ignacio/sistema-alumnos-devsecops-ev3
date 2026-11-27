@@ -48,3 +48,12 @@ def test_vuln04_hash_robusto_y_login_correcto(client, monkeypatch):
     monkeypatch.setattr(modulo_app, "ADMIN_CLAVE_HASH", generate_password_hash("Clave-Larga-De-Prueba-2026"))
     assert modulo_app.ADMIN_CLAVE_HASH.startswith(("pbkdf2:", "scrypt:"))
     assert _login(client, "admin", "Clave-Larga-De-Prueba-2026").status_code == 200
+
+
+def test_vuln05_login_sin_token_csrf_se_rechaza(client):
+    r = client.post("/login", data={"usuario": "admin", "clave": "admin"})
+    assert r.status_code == 400
+
+
+def test_vuln05_portada_incluye_token_csrf(client):
+    assert 'name="csrf_token" value="' in client.get("/").get_data(as_text=True)

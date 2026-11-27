@@ -12,7 +12,7 @@ import secrets
 import sqlite3
 import time
 
-from flask import Flask, Response, g, jsonify, render_template_string, request
+from flask import Flask, Response, g, jsonify, render_template_string, request, session
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -71,6 +71,7 @@ PORTADA = """<!doctype html>
 </form>
 <h2>Acceso administrador</h2>
 <form action="/login" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input name="usuario" value="admin"> <input name="clave" type="password" value="">
   <button type="submit">Entrar</button>
 </form>
@@ -145,7 +146,27 @@ def portada():
     @brief Portada HTML con enlaces y formularios del sistema.
     @return Página HTML.
     """
-    return render_template_string(PORTADA, version=VERSION)
+    return render_template_string(PORTADA, version=VERSION, csrf_token=token_csrf())
+
+
+def token_csrf():
+    """!
+    @brief VULN-05: token anti-CSRF por sesión (patrón synchronizer token).
+    @return Token aleatorio guardado en la sesión firmada del usuario.
+    """
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_urlsafe(32)
+    return session["csrf_token"]
+
+
+def csrf_valido():
+    """!
+    @brief Comprueba en tiempo constante que el formulario trae el token de la sesión.
+    @return True si el token es válido.
+    """
+    esperado = session.get("csrf_token", "")
+    recibido = request.form.get("csrf_token", "")
+    return bool(esperado) and hmac.compare_digest(esperado, recibido)
 
 
 @app.route("/hello")
@@ -227,6 +248,9 @@ def login():
     @brief Valida las credenciales del administrador enviadas por formulario.
     @return JSON con el resultado; 401 si las credenciales no son válidas.
     """
+    if not csrf_valido():
+        app.logger.warning("Login rechazado: token CSRF ausente o inválido desde %s", request.remote_addr)
+        return jsonify({"error": "Token CSRF inválido"}), 400
     usuario = request.form.get("usuario", "")
     clave = request.form.get("clave", "")
     # check_password_hash compara en tiempo constante; siempre se calcula el hash para no revelar si el usuario existe.
