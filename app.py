@@ -10,7 +10,9 @@ import os
 import re
 import secrets
 import sqlite3
+import threading
 import time
+from collections import defaultdict, deque
 
 from flask import Flask, Response, g, jsonify, render_template_string, request, session
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
@@ -251,16 +253,73 @@ def login():
     if not csrf_valido():
         app.logger.warning("Login rechazado: token CSRF ausente o inválido desde %s", request.remote_addr)
         return jsonify({"error": "Token CSRF inválido"}), 400
-    usuario = request.form.get("usuario", "")
-    clave = request.form.get("clave", "")
+    ip = request.remote_addr or "desconocida"
+    usuario = request.form.get("usuario", "")[:64]
+    clave = request.form.get("clave", "")[:256]
+    # VULN-06: tras MAX_FALLIDOS intentos fallidos en VENTANA_S segundos la IP queda bloqueada (HTTP 429).
+    espera = segundos_bloqueo(ip)
+    if espera:
+        LOGIN_FALLIDOS.inc()
+        SOSPECHOSAS.labels(tipo="fuerza_bruta").inc()
+        app.logger.warning("Login bloqueado por fuerza bruta desde %s (%s s restantes)", ip, espera)
+        return jsonify({"error": "Demasiados intentos. Intenta más tarde."}), 429, {"Retry-After": str(espera)}
     # check_password_hash compara en tiempo constante; siempre se calcula el hash para no revelar si el usuario existe.
     clave_ok = check_password_hash(ADMIN_CLAVE_HASH, clave)
     if hmac.compare_digest(usuario, ADMIN_USUARIO) and clave_ok:
+        limpiar_fallos(ip)
         LOGIN_EXITOSOS.inc()
         return jsonify({"mensaje": "Bienvenido, administrador"})
+    registrar_fallo(ip)
     LOGIN_FALLIDOS.inc()
-    app.logger.warning("Login fallido para el usuario '%s' desde %s", usuario, request.remote_addr)
+    # %r escapa saltos de línea: el usuario no puede falsificar líneas del log (CWE-117).
+    app.logger.warning("Login fallido para el usuario %r desde %s", usuario, ip)
     return jsonify({"error": "Credenciales inválidas"}), 401
+
+
+# ---------------------------------------------------------------- VULN-06: límite de intentos de login
+MAX_FALLIDOS = int(os.environ.get("LOGIN_MAX_FALLIDOS", "5"))
+VENTANA_S = int(os.environ.get("LOGIN_VENTANA_S", "300"))
+_FALLOS = defaultdict(deque)
+_FALLOS_LOCK = threading.Lock()
+
+
+def _purgar(ip, ahora):
+    cola = _FALLOS[ip]
+    while cola and cola[0] <= ahora - VENTANA_S:
+        cola.popleft()
+    return cola
+
+
+def segundos_bloqueo(ip):
+    """!
+    @brief Indica si la IP superó el máximo de intentos fallidos dentro de la ventana.
+    @param ip Dirección IP del cliente.
+    @return Segundos que faltan para desbloquear (0 si no está bloqueada).
+    """
+    ahora = time.monotonic()
+    with _FALLOS_LOCK:
+        cola = _purgar(ip, ahora)
+        if len(cola) < MAX_FALLIDOS:
+            return 0
+        return max(1, int(cola[0] + VENTANA_S - ahora))
+
+
+def registrar_fallo(ip):
+    """!
+    @brief Registra un intento fallido de la IP.
+    @param ip Dirección IP del cliente.
+    """
+    with _FALLOS_LOCK:
+        _purgar(ip, time.monotonic()).append(time.monotonic())
+
+
+def limpiar_fallos(ip):
+    """!
+    @brief Borra los intentos fallidos de la IP tras un login correcto.
+    @param ip Dirección IP del cliente.
+    """
+    with _FALLOS_LOCK:
+        _FALLOS.pop(ip, None)
 
 
 @app.route("/metrics")

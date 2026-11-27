@@ -7,8 +7,10 @@ import app as modulo_app
 @pytest.fixture
 def client():
     modulo_app.app.config["TESTING"] = True
+    modulo_app._FALLOS.clear()
     with modulo_app.app.test_client() as c:
         yield c
+    modulo_app._FALLOS.clear()
 
 
 def test_vuln01_inyeccion_sql_no_expone_la_base(client):
@@ -57,3 +59,9 @@ def test_vuln05_login_sin_token_csrf_se_rechaza(client):
 
 def test_vuln05_portada_incluye_token_csrf(client):
     assert 'name="csrf_token" value="' in client.get("/").get_data(as_text=True)
+
+
+def test_vuln06_fuerza_bruta_bloquea_con_429(client):
+    codigos = [_login(client, "admin", f"clave-{i}").status_code for i in range(modulo_app.MAX_FALLIDOS + 2)]
+    assert codigos[:modulo_app.MAX_FALLIDOS] == [401] * modulo_app.MAX_FALLIDOS
+    assert codigos[-1] == 429
